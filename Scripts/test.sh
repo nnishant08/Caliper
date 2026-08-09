@@ -72,10 +72,25 @@ fi
 # preflight with "Busy" while the device is still coming up.
 xcrun simctl bootstatus "$simulator" -b >/dev/null 2>&1 || true
 
-xcodebuild test \
+log=$(mktemp -t caliper-xcodebuild)
+trap 'rm -f "$log"' EXIT
+
+if ! xcodebuild test \
     -project Caliper.xcodeproj \
     -scheme Caliper \
-    -destination "id=${simulator}" \
-    -quiet
+    -destination "id=${simulator}" > "$log" 2>&1
+then
+    grep -vE '^CoreData: error|\[error\] CoreData' "$log" | tail -40
+    exit 1
+fi
+
+# A test bundle that fails to load reports "Executed 0 tests" and exits zero, so
+# the exit code alone does not prove anything ran.
+if ! grep -qE 'Test run with [1-9][0-9]* tests? in [0-9]+ suites? passed' "$log"; then
+    printf '  ✗ no Swift Testing run was reported — the suite did not execute.\n'
+    exit 1
+fi
+
+grep -oE 'Test run with [0-9]+ tests? in [0-9]+ suites? passed' "$log" | tail -1 | sed 's/^/  ✓ /'
 
 printf '\n✓ all tests passed\n'

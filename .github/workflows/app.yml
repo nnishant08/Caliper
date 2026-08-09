@@ -83,12 +83,22 @@ jobs:
           # Boot first: xcodebuild will boot a shut-down device itself, but the
           # launch then races the device coming up and fails preflight as "Busy".
           xcrun simctl bootstatus "${{ steps.simulator.outputs.udid }}" -b || true
+
+          set -o pipefail
           xcodebuild test \
             -project Caliper.xcodeproj \
             -scheme Caliper \
             -destination "id=${{ steps.simulator.outputs.udid }}" \
             -resultBundlePath TestResults.xcresult \
-            -quiet
+            | tee xcodebuild.log
+
+          # A test bundle that fails to load reports "Executed 0 tests" and exits
+          # zero, so the exit code alone does not prove anything ran. This job
+          # exists to run tests; assert that it did.
+          if ! grep -qE 'Test run with [1-9][0-9]* tests? in [0-9]+ suites? passed' xcodebuild.log; then
+            echo "::error::No Swift Testing run was reported — the suite did not execute."
+            exit 1
+          fi
 
       - name: Upload results on failure
         if: failure()
