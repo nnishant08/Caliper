@@ -1,10 +1,11 @@
 import Foundation
+import NutritionKit
 import SwiftData
 
-// The two models below are the seed of the schema. They exist at M0 because the
+// The models below are the seed of the schema. They exist at M0 because the
 // container split needs real members on both sides of the boundary for the
-// separation test to be meaningful rather than vacuously true. Both are models
-// we keep — nothing here is a placeholder to be deleted later.
+// separation test to be meaningful rather than vacuously true. All are models we
+// keep — nothing here is a placeholder to be deleted later.
 //
 // Every synced property carries a default value. That is not style: SwiftData
 // backed by CloudKit requires every attribute to be optional or defaulted, and
@@ -38,6 +39,45 @@ final class UserSettings {
     init(dayStartHour: Int = DayBoundaryPolicy.defaultDayStartHour, timeZoneIdentifier: String = "UTC") {
         self.dayStartHour = dayStartHour
         self.timeZoneIdentifier = timeZoneIdentifier
+    }
+}
+
+/// An observation of the day-boundary policy in force on a particular logging day.
+///
+/// Written when a day is first opened — its first log entry, or the first app
+/// launch that resolves into it — and only when the policy differs from the
+/// previous observation, so this table stays tiny.
+///
+/// It exists because day length is not derivable from the log entries alone. A
+/// day with no entries still has a duration, and the expenditure estimate
+/// divides by real elapsed time rather than a count of day keys (see
+/// `DayDurations`). Without a record of which zone and day-start hour applied,
+/// a window containing a flight cannot be measured at all.
+///
+/// App-owned and therefore synced: a new device must be able to reconstruct the
+/// durations behind estimates the user has already seen.
+@Model
+final class DayBoundaryRecord {
+
+    /// The `DayIndex.rawValue` this observation applies from.
+    var dayIndex: Int = 0
+
+    var dayStartHour: Int = DayBoundaryPolicy.defaultDayStartHour
+
+    var timeZoneIdentifier: String = "UTC"
+
+    init(dayIndex: Int, dayStartHour: Int, timeZoneIdentifier: String) {
+        self.dayIndex = dayIndex
+        self.dayStartHour = dayStartHour
+        self.timeZoneIdentifier = timeZoneIdentifier
+    }
+
+    var snapshot: DayBoundarySnapshot {
+        DayBoundarySnapshot(
+            dayIndex: DayIndex(rawValue: dayIndex),
+            dayStartHour: dayStartHour,
+            timeZoneIdentifier: timeZoneIdentifier
+        )
     }
 }
 

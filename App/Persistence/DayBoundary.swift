@@ -52,6 +52,18 @@ enum DayBoundaryError: Error, Equatable {
     case dayStartHourOutOfRange(Int)
     case unknownTimeZone(String)
     case unresolvableInstant(Date)
+    case unresolvableDay(Int)
+    case unorderedBoundaryRecords
+}
+
+/// A proleptic Gregorian calendar date, with no zone and no time attached.
+///
+/// A named type rather than a tuple so that `year`, `month` and `day` cannot be
+/// silently transposed at a call site.
+struct CivilDate: Equatable, Sendable {
+    let year: Int
+    let month: Int
+    let day: Int
 }
 
 /// Converts an instant into the `DayIndex` that NutritionKit's window arithmetic
@@ -119,6 +131,33 @@ struct DayKeyResolver {
         return DayIndex(rawValue: dayNumber)
     }
 
+    /// The instant at which `day` begins under this policy.
+    ///
+    /// The inverse of `dayIndex(for:)`, and the basis of every duration
+    /// question: a logging day is not 24 hours, it is whatever elapses between
+    /// its own start and the next day's start under whatever policy was in force
+    /// at each end. See `DaySeam`.
+    func startInstant(of day: DayIndex) throws -> Date {
+        let civil = Self.civilFromDays(day.rawValue)
+
+        var components = DateComponents()
+        components.year = civil.year
+        components.month = civil.month
+        components.day = civil.day
+        components.hour = dayStartHour
+        components.minute = 0
+        components.second = 0
+
+        // `date(from:)` resolves a wall-clock time that does not exist — a
+        // day-start hour falling inside a spring-forward gap — to the first
+        // instant after the gap. That is the behaviour we want: the day starts
+        // when the clock reaches it.
+        guard let instant = calendar.date(from: components) else {
+            throw DayBoundaryError.unresolvableDay(day.rawValue)
+        }
+        return instant
+    }
+
     /// Days from 1970-01-01 to the given proleptic Gregorian civil date.
     ///
     /// Howard Hinnant's `days_from_civil`, which is exact for the full range of
@@ -137,5 +176,22 @@ struct DayKeyResolver {
 
         // 719468 is the number of days from 0000-03-01 to 1970-01-01.
         return era * 146_097 + dayOfEra - 719_468
+    }
+
+    /// The proleptic Gregorian civil date `days` after 1970-01-01.
+    ///
+    /// Hinnant's `civil_from_days`, the exact inverse of `daysFromCivil`.
+    static func civilFromDays(_ days: Int) -> CivilDate {
+        let shifted = days + 719_468
+        let era = (shifted >= 0 ? shifted : shifted - 146_096) / 146_097
+        let dayOfEra = shifted - era * 146_097                                            // [0, 146096]
+        let yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36_524 - dayOfEra / 146_096) / 365
+        let year = yearOfEra + era * 400
+        let dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)    // [0, 365]
+        let shiftedMonth = (5 * dayOfYear + 2) / 153                                      // [0, 11]
+        let day = dayOfYear - (153 * shiftedMonth + 2) / 5 + 1                            // [1, 31]
+        let month = shiftedMonth + (shiftedMonth < 10 ? 3 : -9)                           // [1, 12]
+
+        return CivilDate(year: year + (month <= 2 ? 1 : 0), month: month, day: day)
     }
 }

@@ -17,7 +17,8 @@ enum CaliperModelContainer {
     ///
     /// Nothing HealthKit-sourced belongs here. Ever.
     static let syncedTypes: [any PersistentModel.Type] = [
-        UserSettings.self
+        UserSettings.self,
+        DayBoundaryRecord.self
     ]
 
     /// Device-local records. Never leave the device; re-derived from HealthKit

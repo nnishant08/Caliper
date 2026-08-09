@@ -218,11 +218,11 @@ against it, and the intake means behind past estimates stay reproducible.
 Because (3) is persisted, an explicit, auditable "re-bucket history" action
 remains possible in Settings; it is deliberately not automatic.
 
-Travel produces genuinely skipped and genuinely doubled local days. The trend
-and expenditure maths count day indices rather than elapsed seconds, so this is
-correct rather than merely tolerated — but any future code assuming
-`14 indices == 14 × 86400 seconds` is wrong. A timezone-traveller case joins the
-M4 synthetic-user suite for this reason.
+Travel produces genuinely skipped and genuinely doubled local days, and freezing
+the key means the day the rule changed is longer or shorter than 24 hours. Any
+code assuming `14 indices == 14 × 86400 seconds` is therefore wrong.
+**ADR-0014 is the resolution of that**, and is required reading alongside this
+record.
 
 ---
 
@@ -348,3 +348,83 @@ to CloudKit is gated.
 Developer Program membership, which is what keeps CI simple. Enabling sync is a
 one-line change plus an entitlement. The separation guarantee does not depend on
 the flag, so nothing about 5.1.3 compliance is deferred.
+
+---
+
+## ADR-0014 — Expenditure divides by elapsed time, not by a count of day keys
+
+**Status:** accepted (M0), consumed at M4. Extends ADR-0008.
+
+**Context.** Day keys resolve once and never recompute, which is right for
+target integrity but means any change to the resolution rule produces a logging
+day of anomalous length:
+
+| Event | Day length |
+|---|---|
+| Day-start hour 00:00 → 04:00 | 28 hours |
+| Day-start hour 04:00 → 00:00 | 20 hours |
+| Sydney → London (August) | 33 hours |
+| London → Sydney (August) | 15 hours |
+| Daylight-saving transition | 23 or 25 hours |
+
+A long day's intake is genuinely larger, which inflates the window's intake mean,
+which inflates the expenditure estimate, which raises targets. The short return
+leg does the reverse.
+
+**Rejected: treat a seam day like an under-logged one** — drop it from the
+intake mean, keep it in the weight-delta window. Two problems.
+
+It under-counts. A 33-hour day's food was really eaten, and the weight change
+across the window contains it. Excluding the day and imputing the mean
+understates total intake while the weight delta still reflects it, so the
+estimate is pulled down from both directions at once.
+
+And the natural detection rule — flag when the resolved UTC offset changes —
+fires on every daylight-saving transition. Every user in a DST country would lose
+two days a year from the intake mean, to correct a one-hour distortion that is
+4% of a day and well inside the noise the EWMA already absorbs.
+
+**Decision.** The expenditure identity is
+
+```
+mean_intake − TDEE = Δweight × 7700 / elapsed
+```
+
+and `elapsed` is *time*, not a count of day keys. A 14-day window containing a
+Sydney → London leg spans 14 days and 9 hours, and the user genuinely expended
+14.375 days' worth of energy across it. So:
+
+1. **The denominator is real elapsed time**, computed as
+   `start(lastDay + 1) − start(firstDay)` from persisted boundary records. One
+   subtraction, no special cases, no detection, exact for seams and DST alike.
+2. **`DayBoundaryRecord`** persists the zone and day-start hour in force from a
+   given day, written only when the policy changes. Day length is not derivable
+   from log entries alone — a day with no entries still has a duration — and this
+   is app-owned data, so it syncs.
+3. **Seam detection serves the UI, not the maths.** Days departing from 24 hours
+   by ≥ 2 hours are surfaced and explained. The threshold sits above every
+   daylight-saving shift in use (one hour almost everywhere, thirty minutes on
+   Lord Howe Island) and far below any timezone seam.
+
+**Consequences.** Ignoring the correction on a single-leg window overstates the
+per-day figures by about 2.7% — roughly 70 kcal a day on a 2,600 kcal
+expenditure, sustained for a fortnight, in the direction that quietly stalls a
+cut.
+
+A round trip inside one window cancels exactly, which is the common case for a
+short trip and produces no distortion at all. The error is real when only one leg
+falls inside the window.
+
+The short return leg matters more for copy than for maths. A 15-hour day looks
+exactly like a day of under-logging, and reporting it as such would have the app
+telling the user something untrue about their own behaviour — the precise thing
+§1 rules out. Seam days are labelled with their cause, not with a scolding.
+
+**Rejected: scaling a seam day's intake to a 24-hour equivalent.** Eating is not
+uniform in time, and a 33-hour day containing a long-haul flight has thoroughly
+atypical intake. Scaling would manufacture precision we have not earned.
+
+**M4 owes evidence for this.** `SydneyLondonRoundTrip` joins the synthetic-user
+suite — a mid-cut trip with both seams — reported under both the elapsed-time
+denominator and the naive day-count one, so the choice is evidenced rather than
+asserted. Same treatment as ADR-0010's endpoint-versus-regression comparison.
