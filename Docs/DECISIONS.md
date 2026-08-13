@@ -518,3 +518,136 @@ range instead. Scaling the wrong day is worse than scaling none.
 
 **M4 owes:** the scaled target on both legs of `SydneyLondonRoundTrip`, shown
 against the unscaled one, and the clamp ordering exercised on the short leg.
+
+---
+
+## ADR-0017 — Reading the Open Food Facts export: three traps and a reporting rule
+
+**Status:** accepted (M1).
+
+**Context.** The OFF parquet export is not shaped the way its documentation and
+its column names suggest. Three of its properties will silently corrupt a naive
+ingest, and a fourth changes how the resulting reject rates should be read. All
+four are the kind of decision a future tuning pass reverses without noticing,
+which is why they are recorded rather than left in the code.
+
+### 1. `nutriments` is long-form, and must be pivoted per row
+
+The column is
+`list<struct{name, value, 100g, serving, unit, prepared_value, prepared_100g, prepared_serving, prepared_unit}>`.
+
+**There is no `energy-kcal_100g` column anywhere in the file.** `energy-kcal` is
+a *value* of the `name` field inside that list. Every row must be pivoted into a
+name-keyed mapping before any nutrient can be read.
+
+Cost: a dict build per row, ~4.67M times on a full pass. Accepted because the
+alternative — a column that does not exist — is not available. The pivot is
+shared across all rules so it is paid once per row, not once per rule.
+
+`nutrition_data_per` is deliberately not read. It is 51% null, and of the rows
+explicitly marked `100g` only 49.4% actually carry `energy-kcal.100g`. The
+`100g` leaf is already normalised by OFF regardless, so the field can only
+mislead.
+
+### 2. The bare `energy` nutriment carries mixed units in one column
+
+Sampled: kJ on ~32,724 rows, kcal on ~12,198, null unit on ~70. It is read
+**only** through its own `unit` field, in a fixed order:
+
+```
+energy-kcal  ->  energy-kj / 4.184  ->  energy (unit-qualified only)  ->  reject
+```
+
+An unrecognised or absent unit resolves to nothing rather than to a guess.
+
+**Why this one is dangerous rather than merely wrong.** Treating `energy` as
+kcal inflates roughly 2.7% of the database by 4.184x — and those rows still pass
+every plausibility check downstream. A 150 kcal product becomes 628, comfortably
+under the 900 kcal/100 g ceiling, with macros that were never touched. Nothing
+later in the pipeline can catch it; the only defence is not making the error.
+`test_bare_energy_in_kilojoules_is_converted_not_taken_at_face_value` pins it.
+
+### 3. Atwater mismatch is a flag, not a reject
+
+4/4/9 is wrong **by construction** for polyols, unavailable fibre and alcohol, so
+a mismatch is frequently the product being unusual rather than the row being
+junk. Rejecting at the 30% threshold discards roughly 102k real products.
+
+- `> 50%` **and** `> 100 kcal` — reject (R11). Both thresholds must be breached,
+  so a 60% mismatch on a 12 kcal celery product is ignored as the arithmetic
+  noise it is.
+- `> 30%` **and** `> 50 kcal` — keep, set `quality_flags`, downrank in search.
+
+This is ADR-0007's stance applied to data rather than to days: shown and
+explained beats silently dropped. A downranked product is one the user can still
+find and still correct; a rejected one is indistinguishable from a product that
+never existed.
+
+### 4. Reject rates are reported under two attributions, not one
+
+First-match attribution is an artefact of rule ordering, not a property of the
+data. R12 (no target market) disqualifies about 68% of the export **on its own**,
+so whether it runs first or last moves tens of percentage points between rows of
+the reject table without one row changing fate.
+
+The build therefore prints both columns:
+
+- **first match** — the reason a row is absent, in numeric rule order. Sums to
+  the rejected total and explains the row count.
+- **independent** — whether that rule alone would have rejected the row. Sums to
+  nothing, because rows fail several rules at once, but it is the column that
+  describes the data.
+
+Measured on a 61,313-row strided sample, the two disagree sharply: R6 is 20.38%
+first-match against 27.14% independent, R7 1.36% against 28.63%, R12 43.32%
+against 68.18%. Reading only the first-match column would badly understate how
+much of the export is unusable for reasons other than market.
+
+A rule that cannot be evaluated does not fire — R9 says nothing about a row with
+no energy — so the independent column is a lower bound and never contradicts the
+first-match one.
+
+---
+
+## ADR-0018 — A product with no stated serving defaults to 100 g
+
+**Status:** accepted (M1), implemented M3.
+
+**Context.** 31.9% of accepted OFF products carry no serving information at all —
+neither a parseable `serving_quantity` nor free-text `serving_size`. The rows are
+otherwise sound; the label simply never stated a portion.
+
+That is a product problem rather than a data one. `Docs/SPEED_BUDGET.md` sets
+barcode → logged at ≤ 4 actions counting the launch tap, which leaves no room for
+the user to type a quantity. Roughly a third of scans would miss the budget.
+
+**Decision.** When `quality_flags & NO_SERVING_SIZE`, the logging sheet prefills
+the quantity as **100 g**, labelled in grams. Editing it costs one action, paid
+only by the user who wants a different amount.
+
+**Why this is not the false precision §1 rules out.** OFF's nutrient values *are*
+per 100 g — that is the basis on which the data was recorded. Prefilling 100 g
+shows the measurement in its own units; it does not invent a portion. The
+dishonest version would be labelling that quantity **"1 serving"**, which asserts
+a portion the manufacturer never stated. The distinction is the whole decision:
+
+- Permitted: a quantity field reading `100 g`, editable.
+- Forbidden: any string calling it a serving, a portion, or a pack.
+
+**Also forbidden: writing a fabricated serving into `off_products`.** The table is
+read-only by construction and bit-identical to what was ingested (ADR-0004). A
+guessed serving persisted into the OFF table would be exactly the contamination
+the licence separation exists to prevent — and it would travel into any
+derivative we ever published. The default lives in the UI layer, driven by the
+flag, and never touches the row.
+
+**Consequences.** The ≤ 4-action barcode budget holds for 100% of scans rather
+than 68%. Users scanning a product whose label states no serving see the honest
+thing: the numbers as recorded, per 100 g, with the amount in their hands.
+
+**Rejected: dropping rows with no serving.** It would cost ~32% of the database,
+including products a user will scan and expect to find, and turn a one-action
+inconvenience into the dead end §5 forbids.
+
+**M3 owes:** the label copy, and an instrumented count showing a
+`NO_SERVING_SIZE` product still logs in 4 actions.
