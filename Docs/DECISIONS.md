@@ -606,3 +606,48 @@ much of the export is unusable for reasons other than market.
 A rule that cannot be evaluated does not fire — R9 says nothing about a row with
 no energy — so the independent column is a lower bound and never contradicts the
 first-match one.
+
+---
+
+## ADR-0018 — A product with no stated serving defaults to 100 g
+
+**Status:** accepted (M1), implemented M3.
+
+**Context.** 31.9% of accepted OFF products carry no serving information at all —
+neither a parseable `serving_quantity` nor free-text `serving_size`. The rows are
+otherwise sound; the label simply never stated a portion.
+
+That is a product problem rather than a data one. `Docs/SPEED_BUDGET.md` sets
+barcode → logged at ≤ 4 actions counting the launch tap, which leaves no room for
+the user to type a quantity. Roughly a third of scans would miss the budget.
+
+**Decision.** When `quality_flags & NO_SERVING_SIZE`, the logging sheet prefills
+the quantity as **100 g**, labelled in grams. Editing it costs one action, paid
+only by the user who wants a different amount.
+
+**Why this is not the false precision §1 rules out.** OFF's nutrient values *are*
+per 100 g — that is the basis on which the data was recorded. Prefilling 100 g
+shows the measurement in its own units; it does not invent a portion. The
+dishonest version would be labelling that quantity **"1 serving"**, which asserts
+a portion the manufacturer never stated. The distinction is the whole decision:
+
+- Permitted: a quantity field reading `100 g`, editable.
+- Forbidden: any string calling it a serving, a portion, or a pack.
+
+**Also forbidden: writing a fabricated serving into `off_products`.** The table is
+read-only by construction and bit-identical to what was ingested (ADR-0004). A
+guessed serving persisted into the OFF table would be exactly the contamination
+the licence separation exists to prevent — and it would travel into any
+derivative we ever published. The default lives in the UI layer, driven by the
+flag, and never touches the row.
+
+**Consequences.** The ≤ 4-action barcode budget holds for 100% of scans rather
+than 68%. Users scanning a product whose label states no serving see the honest
+thing: the numbers as recorded, per 100 g, with the amount in their hands.
+
+**Rejected: dropping rows with no serving.** It would cost ~32% of the database,
+including products a user will scan and expect to find, and turn a one-action
+inconvenience into the dead end §5 forbids.
+
+**M3 owes:** the label copy, and an instrumented count showing a
+`NO_SERVING_SIZE` product still logs in 4 actions.
