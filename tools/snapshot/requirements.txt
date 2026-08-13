@@ -1,0 +1,5 @@
+pyarrow>=18
+fsspec
+aiohttp
+zstandard
+pytest

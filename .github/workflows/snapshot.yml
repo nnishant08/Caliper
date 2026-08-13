@@ -1,0 +1,45 @@
+# The data pipeline's tests. Neither existing workflow runs Python.
+#
+# Pure unit tests: no network, no parquet download, no snapshot build. The
+# reject rules, the GTIN check-digit direction, the FTS5 rowid join and the
+# attribution string are all exercised against fixtures and temporary SQLite
+# files, so this job stays in seconds.
+
+name: Snapshot pipeline
+
+on:
+  push:
+    paths:
+      - "tools/snapshot/**"
+      - ".github/workflows/snapshot.yml"
+  pull_request:
+    paths:
+      - "tools/snapshot/**"
+      - ".github/workflows/snapshot.yml"
+
+concurrency:
+  group: snapshot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/snapshot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: tools/snapshot/requirements.txt
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: pytest
+        run: python -m pytest tests -q
