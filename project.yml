@@ -1,0 +1,88 @@
+# XcodeGen manifest. `Caliper.xcodeproj` is generated from this file and is
+# gitignored — regenerate with Scripts/bootstrap.sh after changing it.
+#
+# The project file is generated rather than committed because this repo will be
+# restructured repeatedly across M0–M8, and a hand-edited project.pbxproj is
+# where silent corruption comes from.
+
+name: Caliper
+
+options:
+  bundleIdPrefix: app.caliper
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  groupSortPosition: top
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    ENABLE_MODULE_VERIFIER: YES
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+
+packages:
+  NutritionKit:
+    path: Packages/NutritionKit
+  LiftKit:
+    path: Packages/LiftKit
+
+targets:
+
+  Caliper:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    dependencies:
+      - package: NutritionKit
+      - package: LiftKit
+      - sdk: HealthKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.caliper.ios
+        PRODUCT_NAME: Caliper
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_CFBundleDisplayName: Caliper
+        # The app target stays in Swift 5 language mode for now. NutritionKit and
+        # LiftKit are already Swift 6 with strict concurrency, because they are
+        # pure value types where it costs nothing. Migrating the app target is
+        # scheduled for M8 rather than fought alongside SwiftData and HealthKit.
+        SWIFT_STRICT_CONCURRENCY: minimal
+        # Simulator builds need no signing, which keeps CI and a fresh clone
+        # working before an Apple Developer Program team exists.
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+
+  CaliperTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/CaliperAppTests
+    dependencies:
+      - target: Caliper
+      - package: NutritionKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+
+schemes:
+
+  Caliper:
+    build:
+      targets:
+        Caliper: all
+        CaliperTests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - CaliperTests
+    run:
+      config: Debug

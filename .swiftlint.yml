@@ -1,0 +1,106 @@
+# SwiftLint configuration.
+#
+# Two rules here exist because §10 of the brief names them: no force unwraps
+# outside tests, and no `try?` swallowing errors silently. Everything else is
+# either a default rule left on, or an opt-in rule that catches a class of bug
+# rather than a matter of taste. Style bikeshedding is off — the point of this
+# file is to enforce the working agreement, not to have opinions about spacing.
+
+included:
+  - App
+  - Packages/NutritionKit/Sources
+  - Packages/LiftKit/Sources
+  - Widgets
+
+# Tests are excluded wholesale. §10 permits force unwraps in tests, and a test
+# that force-unwraps a fixture it just constructed is clearer than one that
+# guards it.
+excluded:
+  - Tests
+  - Packages/NutritionKit/Tests
+  - Packages/LiftKit/Tests
+  - .build
+  - Caliper.xcodeproj
+  - tools
+
+opt_in_rules:
+  - force_unwrapping
+  - empty_count
+  - explicit_init
+  - first_where
+  - last_where
+  - contains_over_first_not_nil
+  - redundant_nil_coalescing
+  - unavailable_function
+  - overridden_super_call
+  - prohibited_super_call
+  - private_action
+  - private_outlet
+  - toggle_bool
+  - yoda_condition
+
+disabled_rules:
+  - todo                # tracked in Docs/, not policed by the linter
+  - trailing_comma
+
+# Force unwrapping, force try and force cast are errors rather than warnings.
+# A warning is something you scroll past.
+force_unwrapping:
+  severity: error
+
+force_try:
+  severity: error
+
+force_cast:
+  severity: error
+
+line_length:
+  warning: 120
+  error: 160
+  ignores_comments: true
+  ignores_urls: true
+
+type_body_length:
+  warning: 350
+  error: 500
+
+file_length:
+  warning: 500
+  error: 800
+
+function_body_length:
+  warning: 60
+  error: 100
+
+identifier_name:
+  min_length:
+    warning: 2
+  excluded:
+    - id
+    - x
+    - y
+
+custom_rules:
+
+  silent_try:
+    name: "Silently swallowed error"
+    regex: '(?<!\w)try\?\s'
+    message: >-
+      `try?` discards the error. §10: no swallowing errors silently. Use `do/catch`
+      and handle or log it, or `try` and let it propagate. If discarding really is
+      correct here, write the catch and say why in a comment.
+    severity: error
+
+  active_energy_in_budget:
+    name: "Active energy near the calorie budget"
+    regex: 'activeEnergyBurned'
+    message: >-
+      Active energy must never enter the calorie budget (§4). Expenditure is
+      inferred from intake versus weight trend, which already contains activity;
+      reading it back in double-counts every workout. The only file permitted to
+      name this identifier is App/Health/HealthKitTypes.swift, where it appears in
+      the forbidden list.
+    excluded: "App/Health/HealthKitTypes.swift"
+    severity: error
+
+reporter: "xcode"

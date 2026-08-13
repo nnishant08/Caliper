@@ -1,0 +1,108 @@
+# The macOS job. Pull requests only, because macOS runner minutes bill at 10× on
+# private repos.
+#
+# It does three things Linux cannot:
+#
+#   1. Builds and tests the iOS app target — SwiftData container separation
+#      (Guideline 5.1.3) and the HealthKit read-set boundary (§4).
+#   2. Re-runs the NutritionKit suite on *Darwin* Foundation. Foundation-only
+#      gets us free CI on Linux, but corelibs and Darwin still diverge on
+#      Calendar and TimeZone, and this package is entirely date-windowed
+#      arithmetic. Green on Linux and different on device is precisely the bug
+#      class the expenditure engine cannot afford.
+#   3. Runs SwiftLint, which needs sourcekitd.
+
+name: App
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  test:
+    name: Caliper (iOS) + packages on Darwin
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest installed Xcode
+        run: |
+          newest=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Using $newest"
+          sudo xcode-select -s "$newest/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install build tools
+        run: brew install xcodegen swiftlint
+
+      - name: Architectural boundaries
+        run: Scripts/check-boundaries.sh
+
+      # Point 2 above. Deliberately duplicated with the Linux job rather than
+      # replacing it: the pair is the check.
+      - name: NutritionKit on Darwin Foundation
+        run: swift test --package-path Packages/NutritionKit
+
+      - name: LiftKit on Darwin Foundation
+        run: swift test --package-path Packages/LiftKit
+
+      - name: SwiftLint
+        run: swiftlint lint --strict
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Select a simulator
+        id: simulator
+        run: |
+          udid=$(xcrun simctl list devices available -j | /usr/bin/python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          for runtime, entries in sorted(devices.items()):
+              if "iOS" not in runtime:
+                  continue
+              for entry in entries:
+                  if entry.get("isAvailable") and "iPhone" in entry["name"]:
+                      print(entry["udid"])
+                      sys.exit(0)
+          ')
+          if [ -z "$udid" ]; then
+            echo "No iOS simulator runtime on this runner." >&2
+            xcrun simctl list runtimes >&2
+            exit 1
+          fi
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: |
+          # Boot first: xcodebuild will boot a shut-down device itself, but the
+          # launch then races the device coming up and fails preflight as "Busy".
+          xcrun simctl bootstatus "${{ steps.simulator.outputs.udid }}" -b || true
+
+          set -o pipefail
+          xcodebuild test \
+            -project Caliper.xcodeproj \
+            -scheme Caliper \
+            -destination "id=${{ steps.simulator.outputs.udid }}" \
+            -resultBundlePath TestResults.xcresult \
+            | tee xcodebuild.log
+
+          # A test bundle that fails to load reports "Executed 0 tests" and exits
+          # zero, so the exit code alone does not prove anything ran. This job
+          # exists to run tests; assert that it did.
+          if ! grep -qE 'Test run with [1-9][0-9]* tests? in [0-9]+ suites? passed' xcodebuild.log; then
+            echo "::error::No Swift Testing run was reported — the suite did not execute."
+            exit 1
+          fi
+
+      - name: Upload results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults.xcresult

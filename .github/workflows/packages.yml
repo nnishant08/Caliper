@@ -1,0 +1,39 @@
+# The fast job. Runs on every push, on Linux, because NutritionKit and LiftKit
+# import nothing but Foundation.
+#
+# Linux runners are free on private repos where macOS runners bill at 10×, and
+# this is the suite that will run hundreds of times as the expenditure engine is
+# tuned in M4. The macOS counterpart in app.yml re-runs the same package tests on
+# Darwin — see ADR-0006 for why both are needed rather than either.
+
+name: Packages
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  boundaries:
+    name: Architectural boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: Scripts/check-boundaries.sh
+
+  test:
+    name: Swift ${{ matrix.package }} (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.1
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [NutritionKit, LiftKit]
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift test
+        run: swift test --package-path Packages/${{ matrix.package }}
