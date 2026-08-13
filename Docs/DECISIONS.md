@@ -428,3 +428,93 @@ atypical intake. Scaling would manufacture precision we have not earned.
 suite — a mid-cut trip with both seams — reported under both the elapsed-time
 denominator and the naive day-count one, so the choice is evidenced rather than
 asserted. Same treatment as ADR-0010's endpoint-versus-regression comparison.
+
+---
+
+## ADR-0015 — Boundary observations are written per active day, and uncertainty is surfaced
+
+**Status:** accepted (M0). Extends ADR-0014.
+
+**Context.** ADR-0014 divides by real elapsed time, which requires knowing which
+zone and day-start hour applied on each day. The first implementation wrote a
+record only when the policy changed — and that fails on the case the mechanism
+exists for. **The seam day is precisely the day the user is least likely to open
+the app: they are on a plane.** With change-triggered writes, a missing record is
+ambiguous between "nothing changed" and "nobody was looking", so an unobserved
+33-hour day is indistinguishable from an ordinary one.
+
+**Decision.**
+
+1. **One observation per day the app is active**, upserted on scene phase
+   `.active` and on `NSSystemTimeZoneDidChangeNotification` while running. Not on
+   first log entry — a day the user opens without logging is still a day we
+   watched. A few hundred bytes a year buys an unambiguous signal: **absence of a
+   record means nobody was looking.**
+2. **A policy change bracketed by a gap yields `Attribution.somewhereIn`**, not a
+   guess. The seam carries its true total deviation, attributed to the range of
+   days one of which absorbed it. `DaySeam.duration` is `nil` in that case,
+   because no single day can honestly be named.
+3. **`uncertainDays(given:)`** reports the runs whose boundaries cannot be pinned.
+4. **`elapsed(across:)` refuses** when an endpoint falls inside such a run, rather
+   than mis-dividing. **`anchor(_:given:)`** widens the window backwards to the
+   last observed day, which restores exactness.
+
+**Consequences.** The property that makes this tractable is that **total elapsed
+time depends only on the window's two endpoints**, not on where inside it the
+change fell. A window ending today always has a known later endpoint — the app is
+open, or nothing would be asking. So an unobserved flight day costs the
+*attribution*, not the estimate: a test asserts that sparse and dense observation
+sets produce an identical denominator across the same seam.
+
+Uncertainty therefore bites in exactly one place — a window whose *start* falls
+inside an unobserved gap — and anchoring widens rather than narrows, because a
+shorter window is a noisier estimate and the added days are real days with real
+data. Only the record of which zone they were in was missing.
+
+**Rejected: inferring the change time from other signals.** Location would need
+a permission we deliberately do not request. HealthKit workout metadata carries a
+time zone, but depends on the user wearing a watch and is not available until M5.
+Neither is worth a dependency to recover an attribution that does not affect the
+estimate.
+
+---
+
+## ADR-0016 — A seam day's targets scale with the day's real length
+
+**Status:** accepted (M0), implemented at M4.
+
+**Context.** ADR-0014 made the expenditure estimate correct across a 33-hour day.
+The user-facing daily target is still 24 hours wide, so the adherence line reports
+"400 over" on a day the user was not over. That is the same untruth ADR-0014
+removed from the seam copy, one surface up — and on the surface people actually
+look at.
+
+**Decision.** Scale the day's energy and macronutrient targets by
+`duration / 24h`, and annotate with the cause. Not one or the other: an
+unexplained target of 3,438 kcal is its own kind of dishonesty.
+
+Applies only above `DayDurations.seamThreshold`, the same two hours that governs
+seam disclosure, so the target moves exactly when the app is willing to say why.
+Daylight-saving days are left alone.
+
+**Why this is not the intake scaling ADR-0014 rejected.** Scaling a day's
+*intake* to a 24-hour equivalent invents a number — it asserts what the user would
+have eaten in a day they did not live. Scaling the *target* is arithmetic on our
+own output: expenditure is a rate, and a 33-hour day genuinely contains 1.375
+days of it. Nothing is imputed.
+
+**The interaction that would otherwise ship as a bug.** §4's safety clamps —
+deficit never above 25% of expenditure, intake never below 1.1 × BMR — are
+statements about a *daily rate*, not a day's total. A 15-hour return leg scales a
+2,400 kcal target to 1,500, which trips the BMR floor even though the user is not
+under-eating; the next day simply starts sooner. **Clamps are therefore applied to
+the normalised 24-hour figure and the result is scaled, never the reverse.**
+Clamping after scaling would silently inflate every short seam day's target and
+make the app tell a traveller to eat more on the one day that needed it least.
+
+**Uncertain seams are not scaled.** When attribution is `somewhereIn`, no
+particular day's target can be adjusted. The adherence line is annotated with the
+range instead. Scaling the wrong day is worse than scaling none.
+
+**M4 owes:** the scaled target on both legs of `SydneyLondonRoundTrip`, shown
+against the unscaled one, and the clamp ordering exercised on the short leg.

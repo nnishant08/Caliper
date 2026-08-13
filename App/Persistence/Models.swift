@@ -42,17 +42,26 @@ final class UserSettings {
     }
 }
 
-/// An observation of the day-boundary policy in force on a particular logging day.
+/// An observation of the day-boundary policy on a day the app was open.
 ///
-/// Written when a day is first opened — its first log entry, or the first app
-/// launch that resolves into it — and only when the policy differs from the
-/// previous observation, so this table stays tiny.
+/// ## Write trigger
 ///
-/// It exists because day length is not derivable from the log entries alone. A
-/// day with no entries still has a duration, and the expenditure estimate
-/// divides by real elapsed time rather than a count of day keys (see
-/// `DayDurations`). Without a record of which zone and day-start hour applied,
-/// a window containing a flight cannot be measured at all.
+/// Upserted once per logging day, whenever the app becomes active — scene phase
+/// entering `.active`, plus `NSSystemTimeZoneDidChangeNotification` while
+/// running, which catches a zone change mid-session. Not on first log entry: a
+/// day the user opens but does not log is still a day we watched, and the
+/// distinction matters.
+///
+/// One row per *active* day rather than one per policy change. The extra rows
+/// are trivial — a few hundred bytes a year — and they buy the thing that
+/// matters: **absence means nobody was looking**, rather than being ambiguous
+/// between that and "nothing changed". The seam day is exactly the day the user
+/// is least likely to open the app, so a scheme that cannot tell those two apart
+/// fails on the case it exists for. See `DayDurations`.
+///
+/// Day length is not derivable from log entries alone — a day with no entries
+/// still has a duration — and the expenditure estimate divides by real elapsed
+/// time rather than a count of day keys (ADR-0014).
 ///
 /// App-owned and therefore synced: a new device must be able to reconstruct the
 /// durations behind estimates the user has already seen.

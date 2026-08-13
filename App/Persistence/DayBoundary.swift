@@ -54,6 +54,7 @@ enum DayBoundaryError: Error, Equatable {
     case unresolvableInstant(Date)
     case unresolvableDay(Int)
     case unorderedBoundaryRecords
+    case uncertainWindowBoundary(Int)
 }
 
 /// A proleptic Gregorian calendar date, with no zone and no time attached.
