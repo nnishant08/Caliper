@@ -491,3 +491,71 @@ def test_missing_sodium_stays_null_rather_than_being_guessed():
         nutriment("fat", 1.0),
     ]))
     assert product.sodium is None
+
+
+# --------------------------------------------------------------------------
+# Unbounded columns — the bug the full build found
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("nutrient", ["fibre", "sugars", "sodium"])
+def test_implausible_optional_nutrient_is_dropped_not_stored(nutrient):
+    """R9 bounds energy and R10 bounds protein+carb+fat. Nothing bounded these.
+
+    A full build found sodium at 788 g per 100 g. Scaled by 100 that is merely
+    wrong; a value a few orders larger overflows int64 and SQLite refuses the
+    insert, seventy minutes in, naming neither row nor column.
+    """
+    product, reject = evaluate(row(nutriments=[
+        nutriment("energy-kcal", 100.0, "kcal"),
+        nutriment("proteins", 1.0),
+        nutriment("carbohydrates", 1.0),
+        nutriment("fat", 1.0),
+        nutriment(nutrient, 1e30),
+    ]))
+
+    assert reject is None, "one bad optional field must not cost the product"
+    assert product.flags & QualityFlag.IMPLAUSIBLE_NUTRIENT
+    assert product.fibre is None and product.sugar is None and product.sodium is None
+
+
+def test_a_scaled_value_always_fits_int64():
+    """The property that actually matters, stated directly."""
+    product, _ = evaluate(row(
+        serving_quantity="1e30",
+        nutriments=[
+            nutriment("energy-kcal", 100.0, "kcal"),
+            nutriment("proteins", 1.0),
+            nutriment("carbohydrates", 1.0),
+            nutriment("fat", 1.0),
+            nutriment("sugars", 1e18),
+            nutriment("sodium", 1e18),
+        ],
+    ))
+
+    limit = 2**63 - 1
+    for value in (product.code, product.serving_g, product.kcal, product.protein,
+                  product.carbs, product.fat, product.fibre, product.sugar,
+                  product.sodium, product.markets, product.rank, product.last_modified):
+        assert value is None or abs(value) <= limit
+
+
+def test_plausible_extremes_are_still_kept():
+    """Pure salt is ~40 g sodium per 100 g. The bound must not eat real food."""
+    product, reject = evaluate(row(nutriments=[
+        nutriment("energy-kcal", 0.0, "kcal"),
+        nutriment("proteins", 0.0),
+        nutriment("carbohydrates", 0.0),
+        nutriment("fat", 0.0),
+        nutriment("sodium", 39.3),
+    ]))
+    assert reject is None
+    assert product.sodium == 3930
+    assert not (product.flags & QualityFlag.IMPLAUSIBLE_NUTRIENT)
+
+
+def test_absurd_serving_quantity_is_dropped():
+    product, reject = evaluate(row(serving_quantity="99999999", serving_size="a pallet"))
+    assert reject is None
+    assert product.serving_g is None
+    assert product.flags & QualityFlag.IMPLAUSIBLE_NUTRIENT

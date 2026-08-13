@@ -103,6 +103,19 @@ MAX_ENERGY_KCAL_PER_100G: Final = 900.0
 #: slack absorbs rounding on three independently rounded label figures.
 MAX_MACRO_SUM_PER_100G: Final = 105.0
 
+#: No nutrient can exceed the mass it is measured in. The same five grams of
+#: slack as MAX_MACRO_SUM_PER_100G, for the same reason.
+#:
+#: R9 bounds energy and R10 bounds protein+carbohydrate+fat, but fibre, sugar
+#: and sodium were bounded by nothing at all until a full build found sodium at
+#: 788 g/100 g. An unbounded column is not merely wrong, it is an overflow: the
+#: value is scaled and handed to SQLite, which rejects anything past int64 —
+#: seventy minutes into a build, with no indication of which row did it.
+MAX_NUTRIENT_G_PER_100G: Final = 105.0
+
+#: A serving above five kilograms is a data-entry error, not a catering pack.
+MAX_SERVING_G: Final = 5_000.0
+
 #: Atwater cross-check. A mismatch is measured against the stated energy both
 #: relatively and absolutely; a row must breach both to be actioned, so a 60%
 #: mismatch on a 12 kcal celery product is ignored.

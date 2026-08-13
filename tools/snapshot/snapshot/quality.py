@@ -48,6 +48,7 @@ class QualityFlag(enum.IntFlag):
     NO_SERVING_SIZE = 1 << 1
     ENERGY_FROM_KJ = 1 << 2
     ENERGY_FROM_BARE_FIELD = 1 << 3
+    IMPLAUSIBLE_NUTRIENT = 1 << 4
 
 
 @dataclass(slots=True)
@@ -179,6 +180,23 @@ def parse_serving_quantity(raw: Any) -> float | None:
     if value != value or value in (float("inf"), float("-inf")):  # NaN / inf
         return None
     return value if value > 0 else None
+
+
+def _bounded(value: float | None, ceiling: float) -> tuple[float | None, bool]:
+    """Discard a value that cannot be true, rather than storing it.
+
+    Applied to the optional columns — fibre, sugar, sodium, serving mass — which
+    no reject rule constrains. The precedent is `parse_serving_quantity`: a value
+    we cannot believe is *absent*, not fatal. Dropping one optional nutrient
+    costs a field on one product; rejecting the row costs the product; storing it
+    costs the whole build, because a scaled garbage value overflows int64 and
+    SQLite refuses the insert.
+    """
+    if value is None:
+        return None, False
+    if value > ceiling:
+        return None, True
+    return value, False
 
 
 def _leaf(nutriment: dict[str, Any] | None, key: str = "100g") -> float | None:
@@ -338,6 +356,13 @@ def evaluate_full(row: dict[str, Any]) -> Evaluation:
         salt = _leaf(pivoted.get("salt"))
         sodium = salt / config.SALT_TO_SODIUM if salt is not None else None
 
+    # Bound the columns no rule constrains, before anything is scaled.
+    fibre, fibre_bad = _bounded(fibre, config.MAX_NUTRIENT_G_PER_100G)
+    sugar, sugar_bad = _bounded(sugar, config.MAX_NUTRIENT_G_PER_100G)
+    sodium, sodium_bad = _bounded(sodium, config.MAX_NUTRIENT_G_PER_100G)
+    if fibre_bad or sugar_bad or sodium_bad:
+        flags |= QualityFlag.IMPLAUSIBLE_NUTRIENT
+
     # R8 --------------------------------------------------------------
     present = [
         value
@@ -379,7 +404,11 @@ def evaluate_full(row: dict[str, Any]) -> Evaluation:
     # Accepted --------------------------------------------------------
     assert kcal is not None and protein is not None and carbs is not None and fat is not None
     serving_size = (row.get("serving_size") or "").strip() or None
-    serving_quantity = parse_serving_quantity(row.get("serving_quantity"))
+    serving_quantity, serving_bad = _bounded(
+        parse_serving_quantity(row.get("serving_quantity")), config.MAX_SERVING_G
+    )
+    if serving_bad:
+        flags |= QualityFlag.IMPLAUSIBLE_NUTRIENT
     if serving_size is None and serving_quantity is None:
         flags |= QualityFlag.NO_SERVING_SIZE
 

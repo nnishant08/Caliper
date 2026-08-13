@@ -297,3 +297,24 @@ def test_compression_produces_a_distinct_digest(built, tmp_path):
     # what is actually opened.
     assert digest != result.sha256
     assert sha256_of(path) == result.sha256
+
+
+def test_overflow_names_the_offending_barcode_and_column(tmp_path):
+    """A build that dies at minute seventy must say which row did it.
+
+    SQLite reports only "Python int too large to convert", with no row and no
+    column. Reconstructing that from a traceback costs another full build.
+    """
+    path = tmp_path / "overflow.sqlite"
+    with SnapshotWriter(path, batch_size=10) as writer:
+        bad = product(3017620422003, "Impossible")
+        bad.sodium = 10**30
+        writer.add(bad)
+
+        with pytest.raises(ValueError) as caught:
+            writer.flush()
+
+    message = str(caught.value)
+    assert "3017620422003" in message
+    assert "sodium" in message
+    assert "int64" in message

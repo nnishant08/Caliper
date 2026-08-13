@@ -212,10 +212,35 @@ class SnapshotWriter:
         if not self._pending:
             return
         before = self.connection.total_changes
-        self.connection.executemany(INSERT_SQL, self._pending)
+        try:
+            self.connection.executemany(INSERT_SQL, self._pending)
+        except OverflowError as error:
+            # SQLite refuses anything past int64 and names neither the row nor
+            # the column, which on a seventy-minute build is a traceback with no
+            # way back to the product that caused it. Pay the cost of finding it
+            # only when it happens.
+            raise self._describe_overflow(error) from error
         self._inserted += self.connection.total_changes - before
         self._attempted += len(self._pending)
         self._pending.clear()
+
+    def _describe_overflow(self, error: OverflowError) -> ValueError:
+        columns = (
+            "code", "name", "brand", "serving_size", "serving_g", "kcal",
+            "protein", "carbs", "fat", "fibre", "sugar", "sodium", "markets",
+            "rank", "quality_flags", "last_modified",
+        )
+        limit = 2**63 - 1
+
+        for values in self._pending:
+            for column, value in zip(columns, values):
+                if isinstance(value, int) and abs(value) > limit:
+                    return ValueError(
+                        f"barcode {values[0]}: column '{column}' is {value}, past int64. "
+                        "Some upstream value is unbounded — bound it in quality.py "
+                        "rather than widening the column."
+                    )
+        return ValueError(f"integer overflow inserting a batch, offender not identified: {error}")
 
     def write_meta(self, values: dict[str, str]) -> None:
         self.connection.executemany(
